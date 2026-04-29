@@ -1,0 +1,81 @@
+name: Build and Release Agent
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build and Release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.20.13"
+
+      - name: Install osslsigncode
+        run: sudo apt-get install -y osslsigncode
+
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Build Linux agents
+        run: |
+          for ARCH in amd64 386 arm64 arm; do
+            env CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go build \
+              -ldflags "-s -w" \
+              -o "tacticalagent-v${VERSION}-linux-${ARCH}"
+          done
+
+      - name: Build macOS agents
+        run: |
+          for ARCH in amd64 arm64; do
+            env CGO_ENABLED=0 GOOS=darwin GOARCH=${ARCH} go build \
+              -ldflags "-s -w" \
+              -o "tacticalagent-v${VERSION}-darwin-${ARCH}"
+          done
+
+      - name: Build Windows agents
+        run: |
+          for ARCH in amd64 386; do
+            env CGO_ENABLED=0 GOOS=windows GOARCH=${ARCH} go build \
+              -ldflags "-s -w" \
+              -o "tacticalagent-v${VERSION}-windows-${ARCH}.exe"
+          done
+
+      - name: Sign Windows agents
+        env:
+          SIGNING_CERT: ${{ secrets.SIGNING_CERT }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          echo "${SIGNING_CERT}" | base64 -d > signing.pfx
+          for ARCH in amd64 386; do
+            BIN="tacticalagent-v${VERSION}-windows-${ARCH}.exe"
+            osslsigncode sign \
+              -pkcs12 signing.pfx \
+              -pass "${SIGNING_CERT_PASSWORD}" \
+              -n "Redysis RMM Agent" \
+              -i "https://redysis.com" \
+              -ts "http://timestamp.digicert.com" \
+              -in "${BIN}" \
+              -out "${BIN}.signed"
+            mv "${BIN}.signed" "${BIN}"
+          done
+          rm -f signing.pfx
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tacticalagent-v${{ env.VERSION }}-linux-amd64
+            tacticalagent-v${{ env.VERSION }}-linux-386
+            tacticalagent-v${{ env.VERSION }}-linux-arm64
+            tacticalagent-v${{ env.VERSION }}-linux-arm
+            tacticalagent-v${{ env.VERSION }}-darwin-amd64
+            tacticalagent-v${{ env.VERSION }}-darwin-arm64
+            tacticalagent-v${{ env.VERSION }}-windows-amd64.exe
+            tacticalagent-v${{ env.VERSION }}-windows-386.exe
