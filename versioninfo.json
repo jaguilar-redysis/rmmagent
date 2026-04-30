@@ -20,15 +20,15 @@
     },
     "StringFileInfo": {
         "Comments": "",
-        "CompanyName": "AmidaWare Inc",
-        "FileDescription": "Tactical RMM Agent",
+        "CompanyName": "Redysis",
+        "FileDescription": "Redysis RMM Agent",
         "FileVersion": "v2.9.0.0",
-        "InternalName": "tacticalrmm.exe",
-        "LegalCopyright": "Copyright (c) 2025 AmidaWare Inc",
+        "InternalName": "redysisrmm.exe",
+        "LegalCopyright": "Copyright (c) 2025 Redysis",
         "LegalTrademarks": "",
-        "OriginalFilename": "tacticalrmm.exe",
+        "OriginalFilename": "redysisrmm.exe",
         "PrivateBuild": "",
-        "ProductName": "Tactical RMM Agent",
+        "ProductName": "Redysis RMM Agent",
         "ProductVersion": "v2.9.0.0",
         "SpecialBuild": ""
     },
@@ -38,6 +38,5 @@
             "CharsetID": "04B0"
         }
     },
-    "IconPath": "build/onit.ico",
     "ManifestPath": "build/rmm.exe.manifest"
 }
