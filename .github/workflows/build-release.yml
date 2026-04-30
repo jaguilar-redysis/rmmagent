@@ -68,13 +68,14 @@ jobs:
               .StringFileInfo.FileVersion = $ver |
               .StringFileInfo.ProductVersion = $ver
             ' versioninfo.json > versioninfo.tmp.json && mv versioninfo.tmp.json versioninfo.json
-          ~/go/bin/goversioninfo -o resource_windows.syso versioninfo.json
+          ~/go/bin/goversioninfo -64 -o resource_windows_amd64.syso versioninfo.json
+          ~/go/bin/goversioninfo -o resource_windows_386.syso versioninfo.json
           for ARCH in amd64 386; do
             env CGO_ENABLED=0 GOOS=windows GOARCH=${ARCH} go build \
               -ldflags "-s -w" \
               -o "tacticalagent-v${VERSION}-windows-${ARCH}.exe"
           done
-          rm -f resource_windows.syso
+          rm -f resource_windows_amd64.syso resource_windows_386.syso
 
       - name: Sign Windows agents
         env:
