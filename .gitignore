@@ -7,6 +7,7 @@
 *.sh
 *.syso
 *.ico
+!build/redysis.ico
 *.bmp
 build/Output
 tacticalagent-v*

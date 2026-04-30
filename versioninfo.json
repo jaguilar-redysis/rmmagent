@@ -38,5 +38,6 @@
             "CharsetID": "04B0"
         }
     },
+    "IconPath": "build/redysis.ico",
     "ManifestPath": "build/rmm.exe.manifest"
 }

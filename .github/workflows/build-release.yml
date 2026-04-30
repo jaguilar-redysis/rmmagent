@@ -32,7 +32,23 @@ jobs:
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "value=${VERSION}" >> $GITHUB_OUTPUT
 
-      - name: Embed version info into Windows binary
+      - name: Build Linux agents
+        run: |
+          for ARCH in amd64 386 arm64 arm; do
+            env CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go build \
+              -ldflags "-s -w" \
+              -o "tacticalagent-v${VERSION}-linux-${ARCH}"
+          done
+
+      - name: Build macOS agents
+        run: |
+          for ARCH in amd64 arm64; do
+            env CGO_ENABLED=0 GOOS=darwin GOARCH=${ARCH} go build \
+              -ldflags "-s -w" \
+              -o "tacticalagent-v${VERSION}-darwin-${ARCH}"
+          done
+
+      - name: Build Windows agents
         run: |
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f2)
@@ -52,31 +68,13 @@ jobs:
               .StringFileInfo.FileVersion = $ver |
               .StringFileInfo.ProductVersion = $ver
             ' versioninfo.json > versioninfo.tmp.json && mv versioninfo.tmp.json versioninfo.json
-          ~/go/bin/goversioninfo -o resource.syso versioninfo.json
-
-      - name: Build Linux agents
-        run: |
-          for ARCH in amd64 386 arm64 arm; do
-            env CGO_ENABLED=0 GOOS=linux GOARCH=${ARCH} go build \
-              -ldflags "-s -w" \
-              -o "tacticalagent-v${VERSION}-linux-${ARCH}"
-          done
-
-      - name: Build macOS agents
-        run: |
-          for ARCH in amd64 arm64; do
-            env CGO_ENABLED=0 GOOS=darwin GOARCH=${ARCH} go build \
-              -ldflags "-s -w" \
-              -o "tacticalagent-v${VERSION}-darwin-${ARCH}"
-          done
-
-      - name: Build Windows agents
-        run: |
+          ~/go/bin/goversioninfo -o resource_windows.syso versioninfo.json
           for ARCH in amd64 386; do
             env CGO_ENABLED=0 GOOS=windows GOARCH=${ARCH} go build \
               -ldflags "-s -w" \
               -o "tacticalagent-v${VERSION}-windows-${ARCH}.exe"
           done
+          rm -f resource_windows.syso
 
       - name: Sign Windows agents
         env:
