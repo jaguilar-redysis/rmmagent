@@ -9,21 +9,16 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-linux-mac:
     runs-on: ubuntu-latest
-    name: Build and Release
+    name: Build Linux and macOS Agents
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.20.13"
-
-      - name: Install tools
-        run: |
-          sudo apt-get install -y osslsigncode jq
-          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+          go-version: "1.22"
 
       - name: Set version
         id: version
@@ -48,56 +43,7 @@ jobs:
               -o "tacticalagent-v${VERSION}-darwin-${ARCH}"
           done
 
-      - name: Build Windows agents
-        run: |
-          MAJOR=$(echo "$VERSION" | cut -d. -f1)
-          MINOR=$(echo "$VERSION" | cut -d. -f2)
-          PATCH=$(echo "$VERSION" | cut -d. -f3)
-          jq \
-            --argjson major "$MAJOR" \
-            --argjson minor "$MINOR" \
-            --argjson patch "$PATCH" \
-            --arg ver "v${VERSION}.0" \
-            '
-              .FixedFileInfo.FileVersion.Major = $major |
-              .FixedFileInfo.FileVersion.Minor = $minor |
-              .FixedFileInfo.FileVersion.Patch = $patch |
-              .FixedFileInfo.ProductVersion.Major = $major |
-              .FixedFileInfo.ProductVersion.Minor = $minor |
-              .FixedFileInfo.ProductVersion.Patch = $patch |
-              .StringFileInfo.FileVersion = $ver |
-              .StringFileInfo.ProductVersion = $ver
-            ' versioninfo.json > versioninfo.tmp.json && mv versioninfo.tmp.json versioninfo.json
-          ~/go/bin/goversioninfo -64 -o resource_windows_amd64.syso versioninfo.json
-          ~/go/bin/goversioninfo -o resource_windows_386.syso versioninfo.json
-          for ARCH in amd64 386; do
-            env CGO_ENABLED=0 GOOS=windows GOARCH=${ARCH} go build \
-              -ldflags "-s -w" \
-              -o "tacticalagent-v${VERSION}-windows-${ARCH}.exe"
-          done
-          rm -f resource_windows_amd64.syso resource_windows_386.syso
-
-      - name: Sign Windows agents
-        env:
-          SIGNING_CERT: ${{ secrets.SIGNING_CERT }}
-          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
-        run: |
-          echo "${SIGNING_CERT}" | base64 -d > signing.pfx
-          for ARCH in amd64 386; do
-            BIN="tacticalagent-v${VERSION}-windows-${ARCH}.exe"
-            osslsigncode sign \
-              -pkcs12 signing.pfx \
-              -pass "${SIGNING_CERT_PASSWORD}" \
-              -n "Redysis RMM Agent" \
-              -i "https://redysis.com" \
-              -ts "http://timestamp.digicert.com" \
-              -in "${BIN}" \
-              -out "${BIN}.signed"
-            mv "${BIN}.signed" "${BIN}"
-          done
-          rm -f signing.pfx
-
-      - name: Create GitHub Release
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -107,5 +53,98 @@ jobs:
             tacticalagent-v${{ steps.version.outputs.value }}-linux-arm
             tacticalagent-v${{ steps.version.outputs.value }}-darwin-amd64
             tacticalagent-v${{ steps.version.outputs.value }}-darwin-arm64
+
+  build-windows:
+    runs-on: windows-latest
+    name: Build Windows Agents (Inno Setup)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install tools
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+
+      - name: Set version
+        id: version
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "value=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Update version metadata
+        shell: pwsh
+        run: |
+          $parts = $env:VERSION.Split('.')
+          $json = Get-Content versioninfo.json -Raw | ConvertFrom-Json
+          $json.FixedFileInfo.FileVersion.Major = [int]$parts[0]
+          $json.FixedFileInfo.FileVersion.Minor = [int]$parts[1]
+          $json.FixedFileInfo.FileVersion.Patch = [int]$parts[2]
+          $json.FixedFileInfo.ProductVersion.Major = [int]$parts[0]
+          $json.FixedFileInfo.ProductVersion.Minor = [int]$parts[1]
+          $json.FixedFileInfo.ProductVersion.Patch = [int]$parts[2]
+          $json.StringFileInfo.FileVersion = "v$($env:VERSION).0"
+          $json.StringFileInfo.ProductVersion = "v$($env:VERSION).0"
+          $json | ConvertTo-Json -Depth 10 | Set-Content versioninfo.json
+
+      - name: Build and package Windows amd64
+        shell: pwsh
+        run: |
+          goversioninfo -64 -o resource_windows_amd64.syso versioninfo.json
+          $env:CGO_ENABLED = "0"; $env:GOOS = "windows"; $env:GOARCH = "amd64"
+          go build -ldflags "-s -w" -o tacticalrmm.exe
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            /DMyAppVersion="$($env:VERSION)" `
+            /DMySourceDir="$PWD" `
+            "/O$PWD" `
+            "/Ftacticalagent-v$($env:VERSION)-windows-amd64" `
+            build\setup.iss
+          Remove-Item tacticalrmm.exe, resource_windows_amd64.syso -ErrorAction SilentlyContinue
+
+      - name: Build and package Windows 386
+        shell: pwsh
+        run: |
+          goversioninfo -o resource_windows_386.syso versioninfo.json
+          $env:CGO_ENABLED = "0"; $env:GOOS = "windows"; $env:GOARCH = "386"
+          go build -ldflags "-s -w" -o tacticalrmm.exe
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            /DMyAppVersion="$($env:VERSION)" `
+            /DMySourceDir="$PWD" `
+            "/O$PWD" `
+            "/Ftacticalagent-v$($env:VERSION)-windows-386" `
+            build\setup.iss
+          Remove-Item tacticalrmm.exe, resource_windows_386.syso -ErrorAction SilentlyContinue
+
+      - name: Sign Windows installers
+        if: env.SIGNING_CERT != ''
+        shell: pwsh
+        env:
+          SIGNING_CERT: ${{ secrets.SIGNING_CERT }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          [System.Convert]::FromBase64String($env:SIGNING_CERT) | Set-Content -Path signing.pfx -AsByteStream
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits" -Recurse -Filter "signtool.exe" |
+            Where-Object { $_.FullName -like "*\x64\*" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          foreach ($ARCH in @("amd64", "386")) {
+            $BIN = "tacticalagent-v$($env:VERSION)-windows-$ARCH.exe"
+            & $signtool sign /f signing.pfx /p $env:SIGNING_CERT_PASSWORD `
+              /tr http://timestamp.digicert.com /td sha256 /fd sha256 `
+              /d "Redysis RMM Agent" $BIN
+          }
+          Remove-Item signing.pfx
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
             tacticalagent-v${{ steps.version.outputs.value }}-windows-amd64.exe
             tacticalagent-v${{ steps.version.outputs.value }}-windows-386.exe

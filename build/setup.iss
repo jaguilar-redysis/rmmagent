@@ -1,7 +1,13 @@
-#define MyAppName "Tactical RMM Agent"
-#define MyAppVersion "2.11.0"
-#define MyAppPublisher "AmidaWare Inc"
-#define MyAppURL "https://tacticalrmm.com"
+#ifndef MyAppVersion
+  #define MyAppVersion "2.11.0"
+#endif
+#ifndef MySourceDir
+  #define MySourceDir ".."
+#endif
+
+#define MyAppName "Redysis RMM Agent"
+#define MyAppPublisher "Redysis"
+#define MyAppURL "https://redysis.com"
 #define MyAppExeName "tacticalrmm.exe"
 #define MESHEXE "meshagent.exe"
 #define MESHDIR "{sd}\Program Files\Mesh Agent"
@@ -19,8 +25,7 @@ DefaultDirName="{sd}\Program Files\TacticalAgent"
 DisableDirPage=yes
 SetupLogging=yes
 DisableProgramGroupPage=yes
-SetupIconFile=C:\Users\Public\Documents\agent\build\onit.ico
-WizardSmallImageFile=C:\Users\Public\Documents\agent\build\onit.bmp
+SetupIconFile={#MySourceDir}\build\redysis.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma
 SolidCompression=yes
@@ -28,7 +33,7 @@ WizardStyle=modern
 RestartApplications=no
 CloseApplications=no
 MinVersion=6.1
-VersionInfoVersion=2.11.0.0
+VersionInfoVersion={#MyAppVersion}.0
 VersionInfoOriginalFileName=tacticalrmm.exe
 AppCopyright="Copyright (C) 2026 {#MyAppPublisher}"
 
@@ -36,7 +41,7 @@ AppCopyright="Copyright (C) 2026 {#MyAppPublisher}"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "C:\Users\Public\Documents\agent\tacticalrmm.exe"; DestDir: "{app}"; Flags: ignoreversion;
+Source: "{#MySourceDir}\tacticalrmm.exe"; DestDir: "{app}"; Flags: ignoreversion;
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent runascurrentuser
@@ -67,9 +72,8 @@ end;
 procedure DeinitializeSetup();
 var
   ResultCode: Integer;
-  WorkingDir:   String;
+  WorkingDir: String;
 begin
-
   WorkingDir := ExpandConstant('{sd}\Program Files\TacticalAgent');
   Exec('cmd.exe', ' /c tacticalrmm.exe -m installsvc', WorkingDir, SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Log('install service: ' + IntToStr(ResultCode));
