@@ -16,6 +16,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,6 +45,7 @@ type NatsMsg struct {
 	EnvVars                []string          `json:"env_vars"`
 	NushellEnableConfig    bool              `json:"nushell_enable_config"`
 	DenoDefaultPermissions string            `json:"deno_default_permissions"`
+	Stream                 bool              `json:"stream"`
 }
 
 var (
@@ -186,7 +188,11 @@ func (a *Agent) RunRPC() {
 
 				switch runtime.GOOS {
 				case "windows":
-					out, _ := CMDShell(p.Data["shell"], []string{}, p.Data["command"], p.Timeout, false, p.RunAsUser)
+					cmdID := ""
+					if val, ok := p.Data["cmd_id"]; ok {
+						cmdID = val
+					}
+					out, _ := CMDShell(p.Data["shell"], []string{}, p.Data["command"], p.Timeout, false, p.RunAsUser, p.Stream, &a.AgentID, &cmdID, nc)
 					a.Logger.Debugln(out)
 					if out[1] != "" {
 						ret.Encode(out[1])
@@ -200,6 +206,13 @@ func (a *Agent) RunRPC() {
 					opts.Shell = p.Data["shell"]
 					opts.Command = p.Data["command"]
 					opts.Timeout = time.Duration(p.Timeout)
+					opts.Stream = p.Stream
+					opts.Nc = nc
+					cmdID := ""
+					if val, ok := p.Data["cmd_id"]; ok {
+						cmdID = val
+					}
+					opts.CmdID = cmdID
 					out := a.CmdV2(opts)
 					tmp := ""
 					if len(out.Stdout) > 0 {
@@ -217,6 +230,283 @@ func (a *Agent) RunRPC() {
 				if p.ID != 0 {
 					a.rClient.R().SetBody(resultData).Patch(fmt.Sprintf("/api/v3/%d/%s/histresult/", p.ID, a.AgentID))
 				}
+			}(payload)
+
+		case "registry_browse":
+			go func(p *NatsMsg) {
+				var resp []byte
+				ret := codec.NewEncoderBytes(&resp, new(codec.MsgpackHandle))
+				// p.Data is map[string]string
+				path := p.Data["path"]
+				pageStr := p.Data["page"]
+				pageSizeStr := p.Data["page_size"]
+				page := 1
+				pageSize := 200
+
+				if pageStr != "" {
+					if v, err := strconv.Atoi(pageStr); err == nil {
+						page = v
+					}
+				}
+				if pageSizeStr != "" {
+					if v, err := strconv.Atoi(pageSizeStr); err == nil {
+						pageSize = v
+					}
+				}
+
+				if path == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "missing path"})
+					msg.Respond(resp)
+					return
+				}
+
+				subkeys, values, hasMore, err := BrowseRegistry(path, page, pageSize)
+				if err != nil {
+					_ = ret.Encode(map[string]interface{}{"error": err.Error()})
+					msg.Respond(resp)
+					return
+				}
+
+				_ = ret.Encode(map[string]interface{}{
+					"path":     path,
+					"subkeys":  subkeys,
+					"values":   values,
+					"has_more": hasMore,
+				})
+				msg.Respond(resp)
+			}(payload)
+
+		case "registry_create_key":
+			go func(p *NatsMsg) {
+				var resp []byte
+				ret := codec.NewEncoderBytes(&resp, new(codec.MsgpackHandle))
+
+				path, ok := p.Data["path"]
+				if !ok || strings.TrimSpace(path) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing or empty path"})
+					msg.Respond(resp)
+					return
+				}
+
+				err := CreateRegistryKey(path)
+				if err != nil {
+					_ = ret.Encode(map[string]interface{}{"error": err.Error()})
+				} else {
+					_ = ret.Encode(map[string]interface{}{"success": true})
+				}
+				msg.Respond(resp)
+			}(payload)
+
+		case "registry_delete_key":
+			go func(p *NatsMsg) {
+				var resp []byte
+				ret := codec.NewEncoderBytes(&resp, new(codec.MsgpackHandle))
+
+				path, ok := p.Data["path"]
+				if !ok || strings.TrimSpace(path) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing or empty path"})
+					msg.Respond(resp)
+					return
+				}
+
+				err := DeleteRegistryKey(path)
+				if err != nil {
+					_ = ret.Encode(map[string]interface{}{"error": err.Error()})
+				} else {
+					_ = ret.Encode(map[string]interface{}{"success": true})
+				}
+
+				msg.Respond(resp)
+			}(payload)
+
+		case "registry_rename_key":
+			go func(p *NatsMsg) {
+				var resp []byte
+				ret := codec.NewEncoderBytes(&resp, new(codec.MsgpackHandle))
+
+				oldPath, ok1 := p.Data["old_path"]
+				newPath, ok2 := p.Data["new_path"]
+				if !ok1 || !ok2 || strings.TrimSpace(oldPath) == "" || strings.TrimSpace(newPath) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Both old_path and new_path are required"})
+					msg.Respond(resp)
+					return
+				}
+
+				if oldPath == newPath {
+					_ = ret.Encode(map[string]interface{}{"error": "Old and new path cannot be the same"})
+					msg.Respond(resp)
+					return
+				}
+
+				err := RenameRegistryKey(oldPath, newPath)
+				if err != nil {
+					_ = ret.Encode(map[string]interface{}{"error": err.Error()})
+				} else {
+					_ = ret.Encode(map[string]interface{}{"success": true})
+				}
+				msg.Respond(resp)
+			}(payload)
+
+		case "registry_create_value":
+			go func(payload *NatsMsg) {
+				var resp []byte
+				ret := codec.NewEncoderBytes(&resp, new(codec.MsgpackHandle))
+
+				path, ok := payload.Data["path"]
+				if !ok || strings.TrimSpace(path) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing path"})
+					msg.Respond(resp)
+					return
+				}
+
+				valName := ""
+				if n, ok := payload.Data["name"]; ok {
+					valName = n
+				}
+
+				valType, ok := payload.Data["type"]
+				if !ok || strings.TrimSpace(valType) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing value type"})
+					msg.Respond(resp)
+					return
+				}
+
+				var valData interface{}
+				if d, ok := payload.Data["data"]; ok {
+					valData = d
+				}
+
+				created, err := CreateRegistryValue(path, valName, valType, valData)
+				if err != nil {
+					_ = ret.Encode(map[string]interface{}{"error": err.Error()})
+					msg.Respond(resp)
+					return
+				}
+
+				_ = ret.Encode(map[string]interface{}{
+					"status": "success",
+					"name":   created["name"],
+					"type":   created["type"],
+					"data":   created["data"],
+				})
+				msg.Respond(resp)
+			}(payload)
+
+		case "registry_delete_value":
+			go func(payload *NatsMsg) {
+				var resp []byte
+				ret := codec.NewEncoderBytes(&resp, new(codec.MsgpackHandle))
+
+				path, ok := payload.Data["path"]
+				if !ok || strings.TrimSpace(path) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing path"})
+					msg.Respond(resp)
+					return
+				}
+
+				valName, ok := payload.Data["name"]
+				if !ok || strings.TrimSpace(valName) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing value name"})
+					msg.Respond(resp)
+					return
+				}
+
+				err := DeleteRegistryValue(path, valName)
+				if err != nil {
+					_ = ret.Encode(map[string]interface{}{"error": err.Error()})
+					msg.Respond(resp)
+					return
+				}
+
+				_ = ret.Encode(map[string]interface{}{
+					"status": "success",
+					"name":   valName,
+				})
+				msg.Respond(resp)
+			}(payload)
+
+		case "registry_rename_value":
+			go func(payload *NatsMsg) {
+				var resp []byte
+				ret := codec.NewEncoderBytes(&resp, new(codec.MsgpackHandle))
+
+				path, ok := payload.Data["path"]
+				if !ok || strings.TrimSpace(path) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing path"})
+					msg.Respond(resp)
+					return
+				}
+
+				oldName, ok := payload.Data["old_name"]
+				if !ok || strings.TrimSpace(oldName) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing old_name"})
+					msg.Respond(resp)
+					return
+				}
+
+				newName, ok := payload.Data["new_name"]
+				if !ok || strings.TrimSpace(newName) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing new_name"})
+					msg.Respond(resp)
+					return
+				}
+
+				renamed, err := RenameRegistryValue(path, oldName, newName)
+				if err != nil {
+					_ = ret.Encode(map[string]interface{}{"error": err.Error()})
+					msg.Respond(resp)
+					return
+				}
+
+				_ = ret.Encode(map[string]interface{}{
+					"status":   "success",
+					"new_name": renamed,
+				})
+				msg.Respond(resp)
+			}(payload)
+
+		case "registry_modify_value":
+			go func(payload *NatsMsg) {
+				var resp []byte
+				ret := codec.NewEncoderBytes(&resp, new(codec.MsgpackHandle))
+
+				path, ok := payload.Data["path"]
+				if !ok || strings.TrimSpace(path) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing path"})
+					msg.Respond(resp)
+					return
+				}
+
+				valName, ok := payload.Data["name"]
+				if !ok || strings.TrimSpace(valName) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing value name"})
+					msg.Respond(resp)
+					return
+				}
+
+				valType, ok := payload.Data["type"]
+				if !ok || strings.TrimSpace(valType) == "" {
+					_ = ret.Encode(map[string]interface{}{"error": "Missing value type"})
+					msg.Respond(resp)
+					return
+				}
+
+				valData := payload.Data["data"]
+
+				updated, err := ModifyRegistryValue(path, valName, valType, valData)
+				if err != nil {
+					_ = ret.Encode(map[string]interface{}{"error": err.Error()})
+					msg.Respond(resp)
+					return
+				}
+
+				_ = ret.Encode(map[string]interface{}{
+					"status": "success",
+					"name":   updated["name"],
+					"type":   updated["type"],
+					"data":   updated["data"],
+				})
+				msg.Respond(resp)
 			}(payload)
 
 		case "winservices":
@@ -443,7 +733,7 @@ func (a *Agent) RunRPC() {
 		case "runtask":
 			go func(p *NatsMsg) {
 				a.Logger.Debugln("Running task")
-				a.RunTask(p.TaskPK)
+				a.RunTask(p.TaskPK, false)
 			}(payload)
 
 		case "publicip":
@@ -469,7 +759,7 @@ func (a *Agent) RunRPC() {
 				msg.Respond(resp)
 				out, _ := a.InstallWithChoco(p.ChocoProgName)
 				results := map[string]string{"results": out}
-				url := fmt.Sprintf("/api/v3/%d/chocoresult/", p.PendingActionPK)
+				url := fmt.Sprintf("/api/v4/%s/%d/chocoresult/", a.AgentID, p.PendingActionPK)
 				a.rClient.R().SetBody(results).Patch(url)
 			}(payload)
 		case "getwinupdates":
@@ -526,6 +816,103 @@ func (a *Agent) RunRPC() {
 				nc.Flush()
 				nc.Close()
 				os.Exit(0)
+			}(payload)
+
+		case "terminal_start":
+			go func(p *NatsMsg) {
+				sessionID := p.Data["session_id"]
+				shell := p.Data["shell"]
+				if sessionID == "" {
+					a.Logger.Errorln("terminal_start: missing session_id")
+					return
+				}
+				switch runtime.GOOS {
+				case "windows":
+					if shell == "" {
+						shell = "cmd"
+					}
+					if err := StartTerminalSessionWindows(a.AgentID, a.ProgramDir, sessionID, shell, p.RunAsUser, nc, a.Logger); err != nil {
+						a.Logger.Errorln("terminal_start: StartTerminalSessionWindows:", err)
+						SendTerminalError(a.AgentID, sessionID, err.Error(), nc)
+					}
+				default:
+					if shell == "" {
+						shell = "/bin/bash"
+					}
+					if err := a.StartTerminalSession(sessionID, shell, nc); err != nil {
+						a.Logger.Errorln("terminal_start: StartTerminalSession:", err)
+						a.SendTerminalError(a.AgentID, sessionID, err.Error(), nc)
+					}
+				}
+			}(payload)
+
+		case "terminal_input":
+			go func(p *NatsMsg) {
+				sessionID := p.Data["session_id"]
+				if sessionID == "" {
+					a.Logger.Errorln("terminal_input: missing session_id")
+					return
+				}
+				data := p.Data["data"]
+				if data == "" {
+					return
+				}
+				switch runtime.GOOS {
+				case "windows":
+					if err := FeedTerminalInputWindows(sessionID, data); err != nil {
+						a.Logger.Errorln("terminal_input: FeedTerminalInputWindows:", err)
+					}
+				default:
+					if err := a.FeedTerminalInput(sessionID, data); err != nil {
+						a.Logger.Errorln("terminal_input: FeedTerminalInput:", err)
+					}
+				}
+			}(payload)
+
+		case "terminal_resize":
+			go func(p *NatsMsg) {
+				sessionID := p.Data["session_id"]
+				if sessionID == "" {
+					a.Logger.Errorln("terminal_resize: missing session_id")
+					return
+				}
+				rowsStr := p.Data["rows"]
+				colsStr := p.Data["cols"]
+				rows, err1 := strconv.Atoi(rowsStr)
+				cols, err2 := strconv.Atoi(colsStr)
+				if err1 != nil || err2 != nil || rows <= 0 || cols <= 0 {
+					a.Logger.Debugf("terminal_resize: failed to validate values: os=%s session=%s rows=%q cols=%q", runtime.GOOS, sessionID, rowsStr, colsStr)
+					return
+				}
+				switch runtime.GOOS {
+				case "windows":
+					if err := ResizeTerminalSessionWindows(sessionID, rows, cols); err != nil {
+						a.Logger.Errorln("terminal_resize: ResizeTerminalSessionWindows:", err)
+					}
+				default:
+					if err := a.ResizeTerminalSession(sessionID, rows, cols); err != nil {
+						a.Logger.Errorln("terminal_resize: ResizeTerminalSession:", err)
+					}
+				}
+			}(payload)
+
+		case "terminal_kill":
+			go func(p *NatsMsg) {
+				sessionID := p.Data["session_id"]
+				if sessionID == "" {
+					a.Logger.Errorln("terminal_kill: missing session_id")
+					return
+				}
+				switch runtime.GOOS {
+				case "windows":
+					if err := KillTerminalSessionWindows(sessionID); err != nil {
+						a.Logger.Errorln("terminal_kill: KillTerminalSessionWindows:", err)
+					}
+				default:
+					if err := a.KillTerminalSession(sessionID); err != nil {
+						a.Logger.Errorln("terminal_kill: KillTerminalSession:", err)
+					}
+				}
 			}(payload)
 		}
 	})

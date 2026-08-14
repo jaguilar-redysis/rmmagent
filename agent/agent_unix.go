@@ -32,9 +32,11 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/jaypipes/ghw"
 	"github.com/kardianos/service"
+	nats "github.com/nats-io/nats.go"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	psHost "github.com/shirou/gopsutil/v3/host"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	trmm "github.com/wh1te909/trmm-shared"
 	"golang.org/x/text/cases"
@@ -165,6 +167,7 @@ func NewAgentConfig() *rmm.AgentConfig {
 		NatsStandardPort: viper.GetString("natsstandardport"),
 		NatsPingInterval: viper.GetInt("natspinginterval"),
 		Insecure:         viper.GetString("insecure"),
+		UnixTmpDir:       viper.GetString("tmpdir"),
 	}
 	return ret
 }
@@ -173,7 +176,7 @@ func (a *Agent) RunScript(code string, shell string, args []string, timeout int,
 	code = removeWinNewLines(code)
 	content := []byte(code)
 
-	f, err := createNixTmpFile(shell)
+	f, err := createNixTmpFile(a.UnixTmpDir, shell)
 	if err != nil {
 		a.Logger.Errorln("RunScript createNixTmpFile()", err)
 		return "", err.Error(), 85, err
@@ -368,7 +371,7 @@ func (a *Agent) AgentUpdate(url, inno, version string) error {
 }
 
 func (a *Agent) AgentUninstall(code string) {
-	f, err := createNixTmpFile()
+	f, err := createNixTmpFile(a.UnixTmpDir)
 	if err != nil {
 		a.Logger.Errorln("AgentUninstall createNixTmpFile():", err)
 		return
@@ -390,7 +393,6 @@ func (a *Agent) AgentUninstall(code string) {
 
 func (a *Agent) NixMeshNodeID() string {
 	var meshNodeID string
-	meshSuccess := false
 	a.Logger.Debugln("Getting mesh node id")
 
 	if !trmm.FileExists(a.MeshSystemEXE) {
@@ -403,21 +405,27 @@ func (a *Agent) NixMeshNodeID() string {
 	opts.Shell = a.MeshSystemEXE
 	opts.Command = "-nodeid"
 
-	for !meshSuccess {
+	const maxAttempts = 10
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		out := a.CmdV2(opts)
 		meshNodeID = out.Stdout
-		a.Logger.Debugln("Stdout:", out.Stdout)
-		a.Logger.Debugln("Stderr:", out.Stderr)
-		if meshNodeID == "" {
-			time.Sleep(1 * time.Second)
-			continue
-		} else if strings.Contains(strings.ToLower(meshNodeID), "graphical version") || strings.Contains(strings.ToLower(meshNodeID), "zenity") {
-			time.Sleep(1 * time.Second)
-			continue
+		a.Logger.Debugln("NixMeshNodeID() Stdout:", out.Stdout)
+		a.Logger.Debugln("NixMeshNodeID() Stderr:", out.Stderr)
+
+		notReady := meshNodeID == "" || strings.Contains(strings.ToLower(meshNodeID), "graphical version") || strings.Contains(strings.ToLower(meshNodeID), "zenity")
+
+		if !notReady {
+			return meshNodeID
 		}
-		meshSuccess = true
+
+		a.Logger.Debugf("Meshnodeid not ready, attempt %d/%d", attempt, maxAttempts)
+		if attempt < maxAttempts {
+			time.Sleep(1 * time.Second)
+		}
 	}
-	return meshNodeID
+	a.Logger.Debugln("Failed to get meshnodeid after max attempts")
+	return "error getting meshnodeid"
 }
 
 func (a *Agent) getMeshNodeID() (string, error) {
@@ -437,7 +445,7 @@ func (a *Agent) RecoverMesh() {
 		opts.Command = def
 	}
 	a.CmdV2(opts)
-	a.SyncMeshNodeID()
+	a.SyncMeshNodeID(true)
 }
 
 func (a *Agent) GetWMIInfo() map[string]interface{} {
@@ -665,8 +673,8 @@ func (a *Agent) InstallNushell(force bool) {
 		case "darwin":
 			switch runtime.GOARCH {
 			case "arm64":
-				// https://github.com/nushell/nushell/releases/download/0.87.0/nu-0.87.0-aarch64-darwin-full.tar.gz
-				assetName = fmt.Sprintf("nu-%s-aarch64-darwin-full.tar.gz", conf.InstallNushellVersion)
+				// https://github.com/nushell/nushell/releases/download/0.106.1/nu-0.106.1-aarch64-apple-darwin.tar.gz
+				assetName = fmt.Sprintf("nu-%s-aarch64-apple-darwin.tar.gz", conf.InstallNushellVersion)
 			default:
 				a.Logger.Debugln("InstallNushell(): Unsupported architecture and OS:", runtime.GOARCH, runtime.GOOS)
 				return
@@ -674,11 +682,11 @@ func (a *Agent) InstallNushell(force bool) {
 		case "linux":
 			switch runtime.GOARCH {
 			case "amd64":
-				// https://github.com/nushell/nushell/releases/download/0.87.0/nu-0.87.0-x86_64-linux-musl-full.tar.gz
-				assetName = fmt.Sprintf("nu-%s-x86_64-linux-musl-full.tar.gz", conf.InstallNushellVersion)
+				// https://github.com/nushell/nushell/releases/download/0.106.1/nu-0.106.1-x86_64-unknown-linux-musl.tar.gz
+				assetName = fmt.Sprintf("nu-%s-x86_64-unknown-linux-musl.tar.gz", conf.InstallNushellVersion)
 			case "arm64":
-				// https://github.com/nushell/nushell/releases/download/0.87.0/nu-0.87.0-aarch64-linux-gnu-full.tar.gz
-				assetName = fmt.Sprintf("nu-%s-aarch64-linux-gnu-full.tar.gz", conf.InstallNushellVersion)
+				// https://github.com/nushell/nushell/releases/download/0.106.1/nu-0.106.1-aarch64-unknown-linux-musl.tar.gz
+				assetName = fmt.Sprintf("nu-%s-aarch64-unknown-linux-musl.tar.gz", conf.InstallNushellVersion)
 			default:
 				a.Logger.Debugln("InstallNushell(): Unsupported architecture and OS:", runtime.GOARCH, runtime.GOOS)
 				return
@@ -953,8 +961,60 @@ func (a *Agent) installMesh(meshbin, exe, proxy string) (string, error) {
 	return "not implemented", nil
 }
 
-func CMDShell(shell string, cmdArgs []string, command string, timeout int, detached bool, runasuser bool) (output [2]string, e error) {
+func CMDShell(shell string, cmdArgs []string, command string, timeout int, detached bool, runasuser bool, stream bool, agentID *string, cmdID *string, nc *nats.Conn) (output [2]string, e error) {
 	return [2]string{"", ""}, nil
+}
+
+func BrowseRegistry(path string, page int, pageSize int) ([]map[string]interface{}, []map[string]interface{}, bool, error) {
+	return nil, nil, false, errors.New("registry access is only supported on Windows")
+}
+
+func CreateRegistryKey(path string) error {
+	return errors.New("registry key creation is only supported on Windows")
+}
+
+func DeleteRegistryKey(path string) error {
+	return errors.New("deleting registry keys is only supported on Windows")
+}
+
+func RenameRegistryKey(oldPath, newPath string) error {
+	return errors.New("renaming registry keys is only supported on Windows")
+}
+
+func CreateRegistryValue(path string, name string, valType string, data interface{}) (map[string]interface{}, error) {
+	return nil, errors.New("creating registry values is only supported on Windows")
+}
+
+func DeleteRegistryValue(path string, name string) error {
+	return errors.New("deleting registry values is only supported on Windows")
+}
+
+func RenameRegistryValue(path, oldName, newName string) (string, error) {
+	return "", errors.New("renaming registry values is only supported on Windows")
+}
+
+func ModifyRegistryValue(path string, name string, valType string, data interface{}) (map[string]interface{}, error) {
+	return nil, errors.New("modifying registry values is only supported on Windows")
+}
+
+func StartTerminalSessionWindows(agentID string, programDir string, sessionID string, shell string, runAsUser bool, nc *nats.Conn, logger *logrus.Logger) error {
+	return errors.New("failed to start terminal session on windows")
+}
+
+func SendTerminalError(agentID, sessionID, message string, nc *nats.Conn) {
+	// no-op on non-windows builds
+}
+
+func ResizeTerminalSessionWindows(sessionID string, rows, cols int) error {
+	return errors.New("failed to resize terminal session on windows")
+}
+
+func KillTerminalSessionWindows(sessionID string) error {
+	return errors.New("failed to kill terminal session on windows")
+}
+
+func FeedTerminalInputWindows(sessionID string, input string) error {
+	return errors.New("failed to feed input terminal session on windows")
 }
 
 func CMD(exe string, args []string, timeout int, detached bool) (output [2]string, e error) {

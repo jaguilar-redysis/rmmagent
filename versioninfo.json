@@ -2,13 +2,13 @@
     "FixedFileInfo": {
         "FileVersion": {
             "Major": 2,
-            "Minor": 9,
+            "Minor": 11,
             "Patch": 0,
             "Build": 0
         },
         "ProductVersion": {
             "Major": 2,
-            "Minor": 9,
+            "Minor": 11,
             "Patch": 0,
             "Build": 0
         },
@@ -22,14 +22,14 @@
         "Comments": "",
         "CompanyName": "Redysis",
         "FileDescription": "Redysis RMM Agent",
-        "FileVersion": "v2.9.0.0",
+        "FileVersion": "v2.11.0.0",
         "InternalName": "redysisrmm.exe",
-        "LegalCopyright": "Copyright (c) 2025 Redysis",
+        "LegalCopyright": "Copyright (c) 2026 Redysis",
         "LegalTrademarks": "",
         "OriginalFilename": "redysisrmm.exe",
         "PrivateBuild": "",
         "ProductName": "Redysis RMM Agent",
-        "ProductVersion": "v2.9.0.0",
+        "ProductVersion": "v2.11.0.0",
         "SpecialBuild": ""
     },
     "VarFileInfo": {

@@ -43,6 +43,7 @@ type AgentConfig struct {
 	Proxy              string
 	CustomMeshDir      string
 	WinTmpDir          string
+	UnixTmpDir         string
 	WinRunAsUserTmpDir string
 	NatsProxyPath      string
 	NatsProxyPort      string
@@ -134,9 +135,10 @@ type Disk struct {
 }
 
 type MeshNodeID struct {
-	Func    string `json:"func"`
-	Agentid string `json:"agent_id"`
-	NodeID  string `json:"nodeid"`
+	Func        string `json:"func"`
+	Agentid     string `json:"agent_id"`
+	NodeID      string `json:"nodeid"`
+	RunSyncTask bool   `json:"run_sync_task"`
 }
 
 type AssignedTask struct {
